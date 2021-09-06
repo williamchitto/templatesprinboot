@@ -1,0 +1,102 @@
+image: docker:stable
+
+services:
+  - docker:dind   
+
+variables:
+   MAVEN_OPTS: "-Dhttps.protocols=TLSv1.2 -Dmaven.repo.local=$CI_PROJECT_DIR/.m2/repository -Dorg.slf4j.simpleLogger.log.org.apache.maven.cli.transfer.Slf4jMavenTransferListener=WARN -Dorg.slf4j.simpleLogger.showDateTime=true -Djava.awt.headless=true"
+   MAVEN_CLI_OPTS: "--batch-mode --errors --fail-at-end --show-version -DinstallAtEnd=true -DdeployAtEnd=true"
+   CONTAINER_IMAGE: fabricadesoftwareifmt.com.br/registry/$CI_PROJECT_PATH
+
+
+stages:
+    - build
+    - deploy
+    - build_docker
+
+
+
+build_maven:
+  stage: build
+  image: maven:3.6.3-openjdk-11-slim
+  cache:
+    paths:
+      - .m2/repository
+      - target/
+  script:
+    - 'mvn $MAVEN_CLI_OPTS clean package -s $mavenSettings'
+  artifacts:
+      expire_in: 10 day
+      paths:
+        - target/*.jar    
+  only:
+    refs:
+      - develop
+      - /^release/[0-9]+(?:.[0-9]+)+$/
+      - tags
+
+
+deploy_maven:
+  stage: deploy
+  image: maven:3.6.3-openjdk-11-slim
+  cache:
+    paths:
+      - target/
+  script:
+    - 'mvn $MAVEN_CLI_OPTS deploy -s $mavenSettings'
+  only:
+    refs:
+      - master
+
+
+
+##DESENVOLVIMENTO
+build_desenv:
+  stage: build_docker
+  image: docker:latest
+  cache:
+    paths:
+      - target/
+  before_script:
+  - docker login -u $REGISTRY_ADMIN -p $REGISTRY_PASSWORD $REGISTRY_URL
+  script:
+    - docker pull $CONTAINER_IMAGE:$CI_COMMIT_REF_NAME || true
+    - docker build --cache-from $CONTAINER_IMAGE:$CI_COMMIT_REF_NAME --tag $CONTAINER_IMAGE:$CI_COMMIT_REF_NAME .
+    - docker push $CONTAINER_IMAGE:$CI_COMMIT_REF_NAME
+  only:
+    refs:
+      - develop
+
+
+##HOMOLOCAGAO
+build_homologa:
+  stage: build_docker
+  image: docker:latest
+  cache:
+    paths:
+      - target/
+  before_script:
+  - docker login -u $REGISTRY_ADMIN -p $REGISTRY_PASSWORD $REGISTRY_URL
+  script:
+    - docker pull $CONTAINER_IMAGE:hmg || true
+    - docker build --cache-from $CONTAINER_IMAGE:hmg --tag $CONTAINER_IMAGE:$CI_COMMIT_REF_SLUG --tag $CONTAINER_IMAGE:hmg .
+    - docker push $CONTAINER_IMAGE:$CI_COMMIT_REF_SLUG
+    - docker push $CONTAINER_IMAGE:hmg
+  only:
+    refs:
+      - /^release/[0-9]+(?:.[0-9]+)+$/
+
+##PRODUÇÂO
+build_prod:
+  stage: build_docker
+  image: docker:latest
+  before_script:
+  - docker login -u $REGISTRY_ADMIN -p $REGISTRY_PASSWORD $REGISTRY_URL
+  script:
+    - docker pull $CONTAINER_IMAGE:latest || true
+    - docker build --cache-from $CONTAINER_IMAGE:latest --tag $CONTAINER_IMAGE:$CI_COMMIT_REF_SLUG --tag $CONTAINER_IMAGE:latest .
+    - docker push $CONTAINER_IMAGE:$CI_COMMIT_REF_SLUG
+    - docker push $CONTAINER_IMAGE:latest
+  only:
+    refs:
+      - tags
